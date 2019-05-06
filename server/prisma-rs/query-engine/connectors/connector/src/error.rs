@@ -167,3 +167,17 @@ impl From<uuid::parser::ParseError> for ConnectorError {
         ConnectorError::ColumnReadFailure(e.into())
     }
 }
+
+#[cfg(feature = "postgresql")]
+impl From<tokio_postgres::error::Error> for ConnectorError {
+    fn from(e: tokio_postgres::error::Error) -> ConnectorError {
+        ConnectorError::QueryError(e.into())
+    }
+}
+
+#[cfg(feature = "postgresql")]
+impl From<native_tls::Error> for ConnectorError {
+    fn from(e: native_tls::Error) -> ConnectorError {
+        ConnectorError::ConnectionError(e.into())
+    }
+}
