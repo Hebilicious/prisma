@@ -2,10 +2,10 @@ use crate::{data_model, PrismaResult};
 use core::ReadQueryExecutor;
 use prisma_common::config::{self, ConnectionLimit, PrismaConfig, PrismaDatabase};
 use prisma_models::SchemaRef;
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 
 #[cfg(feature = "sql")]
-use sql_connector::{database::SqlDatabase, database::Sqlite};
+use sql_connector::{database::PostgreSql, database::SqlDatabase, database::Sqlite};
 
 #[derive(DebugStub)]
 pub struct PrismaContext {
@@ -18,8 +18,16 @@ pub struct PrismaContext {
 
 impl PrismaContext {
     pub fn new() -> PrismaResult<Self> {
-        let config = config::load().unwrap();
-        let data_resolver = match config.databases.get("default") {
+        let prisma_config = config::load().unwrap();
+
+        let db_name = prisma_config
+            .databases
+            .get("default")
+            .unwrap()
+            .db_name()
+            .expect("database was not set");
+
+        match prisma_config.databases.get("default") {
             Some(PrismaDatabase::File(ref config)) if config.connector == "sqlite-native" => {
                 let db_name = config.db_name();
                 let db_folder = config
@@ -28,25 +36,36 @@ impl PrismaContext {
                     .trim_end_matches("/");
 
                 let sqlite = Sqlite::new(db_folder.to_owned(), config.limit(), false).unwrap();
-                Arc::new(SqlDatabase::new(sqlite))
+                let data_resolver = SqlDatabase::new(sqlite);
+
+                let read_query_executor: ReadQueryExecutor = ReadQueryExecutor {
+                    data_resolver: Arc::new(data_resolver),
+                };
+
+                Ok(Self {
+                    config: prisma_config,
+                    schema: data_model::load(db_name)?,
+                    read_query_executor,
+                })
             }
-            _ => panic!("Database connector is not supported, use sqlite with a file for now!"),
-        };
+            Some(database) => match database.connector() {
+                "postgres-native" => {
+                    let postgres = PostgreSql::try_from(database).unwrap();
+                    let data_resolver = SqlDatabase::new(postgres);
 
-        let read_query_executor: ReadQueryExecutor = ReadQueryExecutor { data_resolver };
+                    let read_query_executor: ReadQueryExecutor = ReadQueryExecutor {
+                        data_resolver: Arc::new(data_resolver),
+                    };
 
-        let db_name = config
-            .databases
-            .get("default")
-            .unwrap()
-            .db_name()
-            .expect("database was not set");
-
-        let schema = data_model::load(db_name)?;
-        Ok(Self {
-            config: config,
-            schema: schema,
-            read_query_executor,
-        })
+                    Ok(Self {
+                        config: prisma_config,
+                        schema: data_model::load(db_name)?,
+                        read_query_executor,
+                    })
+                }
+                connector => panic!("Unsupported connector {}", connector),
+            },
+            None => panic!("Couldn't find default database"),
+        }
     }
 }

@@ -39,7 +39,7 @@ impl MutationBuilder {
             .into_iter()
             .fold(base, |acc, (name, value)| acc.value(name, value));
 
-        (insert.into(), return_id)
+        (Insert::from(insert).returning(vec![model_id.as_column()]), return_id)
     }
 
     pub fn create_relation(field: RelationFieldRef, parent_id: &GraphqlId, child_id: &GraphqlId) -> Query {

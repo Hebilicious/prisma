@@ -1,7 +1,6 @@
 use crate::{DomainError, DomainResult};
 use chrono::{DateTime, Utc};
 use graphql_parser::query::Value as GraphqlValue;
-use rusqlite::types::{FromSql, FromSqlResult, ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{convert::TryFrom, fmt};
@@ -9,6 +8,12 @@ use uuid::Uuid;
 
 #[cfg(feature = "sql")]
 use prisma_query::ast::*;
+
+#[cfg(feature = "sqlite")]
+use rusqlite::types::{FromSql as FromSqlite, FromSqlResult, ValueRef};
+
+#[cfg(feature = "postgresql")]
+use postgres::types::{FromSql as FromPostgreSql, Type as PType};
 
 pub type PrismaListValue = Option<Vec<PrismaValue>>;
 
@@ -221,12 +226,41 @@ impl From<PrismaValue> for DatabaseValue {
     }
 }
 
-impl FromSql for GraphqlId {
+#[cfg(feature = "sqlite")]
+impl FromSqlite for GraphqlId {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         value
             .as_str()
-            .map(|strval| GraphqlId::String(strval.to_string()))
+            .and_then(|strval| {
+                let res = Uuid::from_slice(strval.as_bytes())
+                    .map(|uuid| GraphqlId::UUID(uuid))
+                    .unwrap_or_else(|_| GraphqlId::String(strval.to_string()));
+
+                Ok(res)
+            })
             .or_else(|_| value.as_i64().map(|intval| GraphqlId::Int(intval as usize)))
+    }
+}
+
+#[cfg(feature = "postgresql")]
+impl<'a> FromPostgreSql<'a> for GraphqlId {
+    fn from_sql(ty: &PType, raw: &'a [u8]) -> Result<GraphqlId, Box<dyn std::error::Error + Sync + Send>> {
+        let res = match *ty {
+            PType::INT2 | PType::INT4 | PType::INT8 => GraphqlId::Int(i32::from_sql(ty, raw)? as usize),
+            PType::UUID => GraphqlId::UUID(Uuid::from_sql(ty, raw)?),
+            _ => GraphqlId::String(String::from_sql(ty, raw)?),
+        };
+
+        Ok(res)
+    }
+
+    fn accepts(ty: &PType) -> bool {
+        <&str as FromPostgreSql>::accepts(ty)
+            || <Uuid as FromPostgreSql>::accepts(ty)
+            || <i8 as FromPostgreSql>::accepts(ty)
+            || <i16 as FromPostgreSql>::accepts(ty)
+            || <i32 as FromPostgreSql>::accepts(ty)
+            || <i64 as FromPostgreSql>::accepts(ty)
     }
 }
 

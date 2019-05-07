@@ -102,6 +102,9 @@ pub enum ConnectorError {
 
     #[fail(display = "Conversion error: {}", _0)]
     ConversionError(Error),
+
+    #[fail(display = "Database creation error: {}", _0)]
+    DatabaseCreationError(&'static str),
 }
 
 impl From<DomainError> for ConnectorError {
