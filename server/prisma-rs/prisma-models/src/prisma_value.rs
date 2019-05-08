@@ -194,7 +194,7 @@ impl From<GraphqlId> for DatabaseValue {
         match id {
             GraphqlId::String(s) => s.into(),
             GraphqlId::Int(i) => (i as i64).into(),
-            GraphqlId::UUID(u) => u.to_hyphenated_ref().to_string().into(),
+            GraphqlId::UUID(u) => u.into(),
         }
     }
 }
@@ -215,7 +215,7 @@ impl From<PrismaValue> for DatabaseValue {
             PrismaValue::Boolean(b) => b.into(),
             PrismaValue::DateTime(d) => d.into(),
             PrismaValue::Enum(e) => e.into(),
-            PrismaValue::Json(j) => j.into(),
+            PrismaValue::Json(j) => j.to_string().into(),
             PrismaValue::Int(i) => (i as i64).into(),
             PrismaValue::Relation(i) => (i as i64).into(),
             PrismaValue::Null => DatabaseValue::Parameterized(ParameterizedValue::Null),
@@ -246,7 +246,9 @@ impl FromSqlite for GraphqlId {
 impl<'a> FromPostgreSql<'a> for GraphqlId {
     fn from_sql(ty: &PType, raw: &'a [u8]) -> Result<GraphqlId, Box<dyn std::error::Error + Sync + Send>> {
         let res = match *ty {
-            PType::INT2 | PType::INT4 | PType::INT8 => GraphqlId::Int(i32::from_sql(ty, raw)? as usize),
+            PType::INT2 => GraphqlId::Int(i16::from_sql(ty, raw)? as usize),
+            PType::INT4 => GraphqlId::Int(i32::from_sql(ty, raw)? as usize),
+            PType::INT8 => GraphqlId::Int(i64::from_sql(ty, raw)? as usize),
             PType::UUID => GraphqlId::UUID(Uuid::from_sql(ty, raw)?),
             _ => GraphqlId::String(String::from_sql(ty, raw)?),
         };
@@ -257,7 +259,6 @@ impl<'a> FromPostgreSql<'a> for GraphqlId {
     fn accepts(ty: &PType) -> bool {
         <&str as FromPostgreSql>::accepts(ty)
             || <Uuid as FromPostgreSql>::accepts(ty)
-            || <i8 as FromPostgreSql>::accepts(ty)
             || <i16 as FromPostgreSql>::accepts(ty)
             || <i32 as FromPostgreSql>::accepts(ty)
             || <i64 as FromPostgreSql>::accepts(ty)

@@ -1,7 +1,10 @@
 use crate::{MutationBuilder, PrismaRow, ToPrismaRow, Transaction, Transactional};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use connector::{error::ConnectorError, ConnectorResult};
 use native_tls::TlsConnector;
-use postgres::{types::ToSql, Client, Config, Row as PostgresRow, Transaction as PostgresTransaction};
+use postgres::{
+    types::ToSql, types::Type as PostgresType, Client, Config, Row as PostgresRow, Transaction as PostgresTransaction,
+};
 use prisma_common::config::{ConnectionLimit, ConnectionStringConfig, ExplicitConfig, PrismaDatabase};
 use prisma_models::{GraphqlId, PrismaValue, ProjectRef, TypeIdentifier};
 use prisma_query::{
@@ -42,6 +45,7 @@ impl TryFrom<&ExplicitConfig> for PostgreSql {
         config.port(e.port);
         config.user(&e.user);
         config.ssl_mode(SslMode::Prefer);
+        config.dbname("prisma");
 
         if let Some(ref pw) = e.password {
             config.password(pw);
@@ -57,6 +61,7 @@ impl TryFrom<&ConnectionStringConfig> for PostgreSql {
     fn try_from(s: &ConnectionStringConfig) -> ConnectorResult<Self> {
         let mut config = Config::from_str(s.uri.as_str())?;
         config.ssl_mode(SslMode::Prefer);
+        config.dbname("prisma");
 
         PostgreSql::new(config, s.limit())
     }
@@ -84,16 +89,13 @@ impl<'a> Transaction for PostgresTransaction<'a> {
     fn write(&mut self, q: Query) -> ConnectorResult<Option<GraphqlId>> {
         let id = match q {
             insert @ Query::Insert(_) => {
-                let (sql, params) = visitor::Postgres::build(insert);
+                let (sql, params) = dbg!(visitor::Postgres::build(insert));
 
                 let params: Vec<&ToSql> = params.iter().map(|pv| pv as &ToSql).collect();
                 let stmt = self.prepare(&sql)?;
 
-                self.query(&stmt, params.as_slice())?
-                    .into_iter()
-                    .rev()
-                    .next()
-                    .map(|row| row.get(0))
+                let rows = self.query(&stmt, params.as_slice())?;
+                rows.into_iter().rev().next().map(|row| row.get(0))
             }
             query => {
                 let (sql, params) = dbg!(visitor::Postgres::build(query));
@@ -154,9 +156,16 @@ impl ToPrismaRow for PostgresRow {
                     Some(val) => PrismaValue::Float(val),
                     None => PrismaValue::Null,
                 },
-                TypeIdentifier::Int => match row.try_get(i)? {
-                    Some(val) => PrismaValue::Int(val),
-                    None => PrismaValue::Null,
+                TypeIdentifier::Int => match *row.columns()[i].type_() {
+                    PostgresType::INT2 => {
+                        let val: i16 = row.try_get(i)?;
+                        PrismaValue::Int(val as i64)
+                    }
+                    PostgresType::INT4 => {
+                        let val: i32 = row.try_get(i)?;
+                        PrismaValue::Int(val as i64)
+                    }
+                    _ => PrismaValue::Int(row.try_get(i)?),
                 },
                 TypeIdentifier::Boolean => match row.try_get(i)? {
                     Some(val) => PrismaValue::Boolean(val),
@@ -175,7 +184,10 @@ impl ToPrismaRow for PostgresRow {
                     None => PrismaValue::Null,
                 },
                 TypeIdentifier::DateTime => match row.try_get(i)? {
-                    Some(val) => PrismaValue::DateTime(val),
+                    Some(val) => {
+                        let ts: NaiveDateTime = val;
+                        PrismaValue::DateTime(DateTime::<Utc>::from_utc(ts, Utc))
+                    }
                     None => PrismaValue::Null,
                 },
             };
